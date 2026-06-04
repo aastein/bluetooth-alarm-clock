@@ -27,7 +27,7 @@ BROWSER_APP="Arc"
 BT_DEVICES=()              # repeatable --bt-device; connect each
 AUDIO_OUTPUT_NAME=""       # single-mode output routing
 MULTI_OUTPUT=""            # multi-mode Multi-Output Device (presence enables multi mode)
-RAMP_SPEAKERS=()           # repeatable --ramp-speaker; CoreAudio names to ramp (multi mode)
+RAMP_SPEAKERS=()           # repeatable --ramp-speaker; CoreAudio names or UIDs to ramp (multi mode)
 START_VOLUME=0
 TARGET_VOLUME=60
 RAMP_SECONDS=180
@@ -68,8 +68,9 @@ Multi-speaker mode — ramps each speaker independently:
   --multi-output <name>   Multi-Output Device (created once in Audio MIDI Setup)
                           to select as output. Presence enables multi-speaker mode.
                           Mutually exclusive with --audio-output.
-  --ramp-speaker <name>   CoreAudio output device name to ramp; repeatable.
-                          Requires --multi-output. (List names: device-volume list)
+  --ramp-speaker <id>     CoreAudio output device NAME or UID to ramp; repeatable.
+                          Requires --multi-output. Use a UID to disambiguate
+                          same-named speakers. (List both: device-volume list)
 
 Volumes are 0-100. Times are local.
 EOF

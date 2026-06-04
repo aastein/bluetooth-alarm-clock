@@ -54,7 +54,8 @@ Alarm options (forwarded to alarm.sh — see 'alarm.sh --help'):
   --multi-output <name>   Multi-speaker: Multi-Output Device to select (installs
                           switchaudio-osx; compiles the volume helper, needs swiftc).
                           Mutually exclusive with --audio-output.
-  --ramp-speaker <name>   Multi-speaker: CoreAudio device name to ramp; repeatable.
+  --ramp-speaker <id>     Multi-speaker: CoreAudio device name or UID to ramp;
+                          repeatable. Use a UID for same-named speakers.
                           Requires --multi-output.
   --start-volume <0-100>  Volume before the ramp
   --target-volume <0-100> Volume to ramp up to

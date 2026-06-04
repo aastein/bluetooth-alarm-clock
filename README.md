@@ -68,7 +68,7 @@ below).
 | `--bt-device <id>` | *(none)* | Bluetooth name or MAC to connect. **Repeatable.** Requires `blueutil`. |
 | `--audio-output <name>` | *(none)* | Single-speaker: output device to route to. Requires `SwitchAudioSource`. |
 | `--multi-output <name>` | *(none)* | Multi-speaker: Multi-Output Device to select. Enables multi mode. Mutually exclusive with `--audio-output`. |
-| `--ramp-speaker <name>` | *(none)* | Multi-speaker: CoreAudio device name to ramp. **Repeatable.** Requires `--multi-output`. |
+| `--ramp-speaker <id>` | *(none)* | Multi-speaker: CoreAudio device **name or UID** to ramp. **Repeatable.** Requires `--multi-output`. |
 | `--start-volume <0-100>` | `0` | Volume before the ramp. |
 | `--target-volume <0-100>` | `60` | Volume the ramp climbs to. |
 | `--ramp-seconds <n>` | `180` | Ramp duration in seconds. |
@@ -124,6 +124,21 @@ This compiles the `device-volume.swift` helper (needs Xcode Command Line Tools),
 connects each `--bt-device`, selects the Multi-Output Device, and ramps each
 `--ramp-speaker` from start to target.
 
+**Two speakers of the same model?** They share both a Bluetooth name and a
+CoreAudio name, so names can't tell them apart. Connect them by **MAC address** and
+ramp them by **UID**:
+
+```sh
+bash install.sh --hour 6 --minute 0 \
+  --url "https://www.youtube.com/@markets/live" --browser Arc \
+  --bt-device a8-e6-e8-8d-19-92 --bt-device a8-e6-e8-b5-8d-0c \
+  --multi-output "SonySpeakerPair" \
+  --ramp-speaker "A8-E6-E8-8D-19-92:output" --ramp-speaker "A8-E6-E8-B5-8D-0C:output" \
+  --target-volume 60 --ramp-seconds 180
+```
+
+Get the MACs with `blueutil --paired` and the UIDs with `device-volume list`.
+
 > **Will your speaker actually ramp?** Per-device ramp only works on speakers that
 > honor macOS volume changes (AVRCP). Some Bluetooth speakers ignore them. The tool
 > **probes each `--ramp-speaker` and warns** if it doesn't take. The definitive
@@ -135,14 +150,15 @@ connects each `--bt-device`, selects the Multi-Output Device, and ramps each
 ```sh
 blueutil --paired                  # Bluetooth names / MAC addresses (for --bt-device)
 SwitchAudioSource -a -t output     # audio output names (for --audio-output / --multi-output)
-./device-volume list               # output device names (for --ramp-speaker; after building)
+./device-volume list               # "<name>\t<uid>" per output (for --ramp-speaker; after building)
 ```
 
 The Bluetooth identifier (`--bt-device`) and the audio output / ramp-speaker name
 (`--audio-output`, `--multi-output`, `--ramp-speaker`) are often the same string
 but not always — `blueutil` matches the Bluetooth name/MAC, while
-`SwitchAudioSource`/`device-volume` match the CoreAudio output name shown in
-**System Settings → Sound**.
+`SwitchAudioSource`/`device-volume` match the CoreAudio output name. `--ramp-speaker`
+also accepts a **UID** (from `device-volume list`), which is the only way to tell
+apart two speakers that share a name.
 
 ## Testing without waiting
 

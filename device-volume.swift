@@ -5,9 +5,13 @@
 // devices expose no master volume. Compiled at install time with `swiftc`.
 //
 // Usage:
-//   device-volume list
-//   device-volume get "<device name>"
-//   device-volume set "<device name>" <0-100>
+//   device-volume list                       (prints "<name>\t<uid>")
+//   device-volume get "<name-or-uid>"
+//   device-volume set "<name-or-uid>" <0-100>
+//
+// A device may be addressed by its CoreAudio name OR its UID. Use the UID to
+// disambiguate speakers that share a name (e.g. two of the same model, which
+// report the same name but have distinct, stable UIDs).
 //
 // Exit codes: 0 success; 1 error (device not found / no settable volume / bad
 // args — message on stderr); 2 usage error.
@@ -29,7 +33,7 @@ func errExit(_ msg: String, _ code: Int32 = 1) -> Never {
 
 func usage() -> Never {
     FileHandle.standardError.write(Data(
-        "usage: \(prog) list | get \"<device>\" | set \"<device>\" <0-100>\n".utf8))
+        "usage: \(prog) list | get \"<name-or-uid>\" | set \"<name-or-uid>\" <0-100>\n".utf8))
     exit(2)
 }
 
@@ -44,6 +48,18 @@ func deviceName(_ id: AudioObjectID) -> String? {
     var name: Unmanaged<CFString>?
     let status = AudioObjectGetPropertyData(id, &address, 0, nil, &size, &name)
     guard status == noErr, let cf = name?.takeRetainedValue() else { return nil }
+    return cf as String
+}
+
+func deviceUID(_ id: AudioObjectID) -> String? {
+    var address = AudioObjectPropertyAddress(
+        mSelector: kAudioDevicePropertyDeviceUID,
+        mScope: kAudioObjectPropertyScopeGlobal,
+        mElement: kAudioObjectPropertyElementMain)
+    var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+    var uid: Unmanaged<CFString>?
+    let status = AudioObjectGetPropertyData(id, &address, 0, nil, &size, &uid)
+    guard status == noErr, let cf = uid?.takeRetainedValue() else { return nil }
     return cf as String
 }
 
@@ -80,8 +96,15 @@ func outputDevices() -> [AudioObjectID] {
     return ids.filter(hasOutputChannels)
 }
 
-func findDevice(named name: String) -> AudioObjectID? {
-    return outputDevices().first { deviceName($0) == name }
+func findDevice(_ identifier: String) -> AudioObjectID? {
+    let devices = outputDevices()
+    // Prefer an exact UID match — UIDs are unique per device, so this
+    // disambiguates speakers that share a name (e.g. two of the same model).
+    if let byUID = devices.first(where: { deviceUID($0) == identifier }) {
+        return byUID
+    }
+    // Fall back to an exact name match.
+    return devices.first(where: { deviceName($0) == identifier })
 }
 
 func volumeAddress() -> AudioObjectPropertyAddress {
@@ -115,26 +138,29 @@ guard args.count >= 2 else { usage() }
 
 switch args[1] {
 case "list":
+    // "<name>\t<uid>" so identically-named devices can be told apart by UID.
     for id in outputDevices() {
-        if let name = deviceName(id) { print(name) }
+        let name = deviceName(id) ?? "(unknown)"
+        let uid = deviceUID(id) ?? "(no uid)"
+        print("\(name)\t\(uid)")
     }
 
 case "get":
     guard args.count == 3 else { usage() }
-    let name = args[2]
-    guard let id = findDevice(named: name) else { errExit("output device not found: \(name)") }
-    guard let volume = getVolume(id) else { errExit("device has no readable volume: \(name)") }
+    let identifier = args[2]
+    guard let id = findDevice(identifier) else { errExit("output device not found (by UID or name): \(identifier)") }
+    guard let volume = getVolume(id) else { errExit("device has no readable volume: \(identifier)") }
     print(Int((volume * 100).rounded()))
 
 case "set":
     guard args.count == 4 else { usage() }
-    let name = args[2]
+    let identifier = args[2]
     guard let pct = Int(args[3]), pct >= 0, pct <= 100 else {
         errExit("volume must be an integer 0-100")
     }
-    guard let id = findDevice(named: name) else { errExit("output device not found: \(name)") }
+    guard let id = findDevice(identifier) else { errExit("output device not found (by UID or name): \(identifier)") }
     guard setVolume(id, Float32(pct) / 100.0) else {
-        errExit("could not set volume on '\(name)' (device may not support volume control)")
+        errExit("could not set volume on '\(identifier)' (device may not support volume control)")
     }
 
 default:
