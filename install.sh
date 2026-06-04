@@ -21,8 +21,11 @@ LOG_FILE=""            # derived from LABEL after parsing if left empty
 UNINSTALL=0
 NEED_BLUEUTIL=0
 NEED_SWITCHAUDIO=0
-BT_DEVICE_VALUE=""     # captured --bt-device value, for the permission probe
-FWD_ARGS=()            # alarm.sh flags to forward into the plist (flag value ...)
+MULTI_OUTPUT=""              # --multi-output value (enables multi-speaker mode)
+AUDIO_OUTPUT_PRESENT=0       # whether --audio-output was given (mutual-exclusion check)
+RAMP_SPEAKER_COUNT=0         # number of --ramp-speaker flags supplied
+BT_DEVICE_VALUES=()          # captured --bt-device values, for the permission probe
+FWD_ARGS=()                  # alarm.sh flags to forward into the plist (flag value ...)
 
 die() { echo "$PROG: error: $*" >&2; exit 1; }
 log() { echo "[$PROG] $*"; }
@@ -46,8 +49,13 @@ Schedule / agent options:
 Alarm options (forwarded to alarm.sh — see 'alarm.sh --help'):
   --url <url>             URL to open
   --browser <app>         App for 'open -a'
-  --bt-device <id>        Bluetooth device to connect (installs blueutil if set)
-  --audio-output <name>   Output device to route to (installs switchaudio-osx if set)
+  --bt-device <id>        Bluetooth device to connect; repeatable (installs blueutil)
+  --audio-output <name>   Single-speaker: output to route to (installs switchaudio-osx)
+  --multi-output <name>   Multi-speaker: Multi-Output Device to select (installs
+                          switchaudio-osx; compiles the volume helper, needs swiftc).
+                          Mutually exclusive with --audio-output.
+  --ramp-speaker <name>   Multi-speaker: CoreAudio device name to ramp; repeatable.
+                          Requires --multi-output.
   --start-volume <0-100>  Volume before the ramp
   --target-volume <0-100> Volume to ramp up to
   --ramp-seconds <n>      Ramp duration in seconds
@@ -103,11 +111,19 @@ while [ $# -gt 0 ]; do
       FWD_ARGS+=("$1" "$2"); shift 2 ;;
     --bt-device)
       [ $# -ge 2 ] || die "--bt-device requires a value"
-      if [ -n "$2" ]; then NEED_BLUEUTIL=1; BT_DEVICE_VALUE="$2"; fi
+      if [ -n "$2" ]; then NEED_BLUEUTIL=1; BT_DEVICE_VALUES+=("$2"); fi
       FWD_ARGS+=("$1" "$2"); shift 2 ;;
     --audio-output)
       [ $# -ge 2 ] || die "--audio-output requires a value"
-      if [ -n "$2" ]; then NEED_SWITCHAUDIO=1; fi
+      if [ -n "$2" ]; then NEED_SWITCHAUDIO=1; AUDIO_OUTPUT_PRESENT=1; fi
+      FWD_ARGS+=("$1" "$2"); shift 2 ;;
+    --multi-output)
+      [ $# -ge 2 ] || die "--multi-output requires a value"
+      if [ -n "$2" ]; then NEED_SWITCHAUDIO=1; MULTI_OUTPUT="$2"; fi
+      FWD_ARGS+=("$1" "$2"); shift 2 ;;
+    --ramp-speaker)
+      [ $# -ge 2 ] || die "--ramp-speaker requires a value"
+      RAMP_SPEAKER_COUNT=$((RAMP_SPEAKER_COUNT + 1))
       FWD_ARGS+=("$1" "$2"); shift 2 ;;
     --start-volume|--target-volume)
       [ $# -ge 2 ] || die "$1 requires a value"
@@ -162,6 +178,14 @@ if [ -z "$LOG_FILE" ]; then
   LOG_FILE="$HOME/Library/Logs/$LABEL.log"
 fi
 
+# Mode validation (mirrors alarm.sh, so a misconfig fails at install, not at alarm time).
+if [ -n "$MULTI_OUTPUT" ]; then
+  [ "$AUDIO_OUTPUT_PRESENT" = "0" ] || die "--multi-output and --audio-output are mutually exclusive"
+  [ "$RAMP_SPEAKER_COUNT" -gt 0 ] || die "--multi-output requires at least one --ramp-speaker"
+else
+  [ "$RAMP_SPEAKER_COUNT" -eq 0 ] || die "--ramp-speaker requires --multi-output"
+fi
+
 # ----------------------------------------------------------------------------
 # Ensure the optional dependencies the chosen flags actually need. We install
 # only what is used; if Homebrew is absent we error with guidance.
@@ -181,6 +205,18 @@ ensure_dep() {
 if [ "$NEED_BLUEUTIL" = "1" ];    then ensure_dep blueutil blueutil; fi
 if [ "$NEED_SWITCHAUDIO" = "1" ]; then ensure_dep SwitchAudioSource switchaudio-osx; fi
 
+# Multi-speaker mode needs the CoreAudio volume helper compiled from source.
+if [ -n "$MULTI_OUTPUT" ]; then
+  command -v swiftc >/dev/null 2>&1 \
+    || die "multi-speaker mode needs the Swift compiler (swiftc). Install the Xcode Command Line Tools: xcode-select --install, then re-run."
+  [ -f "$SCRIPT_DIR/device-volume.swift" ] \
+    || die "device-volume.swift not found next to this installer (expected $SCRIPT_DIR/device-volume.swift)"
+  log "compiling volume helper (device-volume.swift)..."
+  swiftc -O "$SCRIPT_DIR/device-volume.swift" -o "$SCRIPT_DIR/device-volume" \
+    || die "failed to compile device-volume.swift"
+  log "built $SCRIPT_DIR/device-volume"
+fi
+
 # ----------------------------------------------------------------------------
 # Surface the one-time macOS Bluetooth permission prompt now, while you're at
 # the keyboard to click "Allow", so the scheduled run can connect without a
@@ -190,15 +226,17 @@ if [ "$NEED_SWITCHAUDIO" = "1" ]; then ensure_dep SwitchAudioSource switchaudio-
 # ----------------------------------------------------------------------------
 if [ "$NEED_BLUEUTIL" = "1" ]; then
   log "checking Bluetooth access — click 'Allow' if a 'blueutil would like to use Bluetooth' prompt appears..."
-  if blueutil --is-connected "$BT_DEVICE_VALUE" >/dev/null 2>&1; then
-    log "Bluetooth access OK; blueutil can see '$BT_DEVICE_VALUE'"
-  else
-    echo "[$PROG] NOTE: blueutil could not query '$BT_DEVICE_VALUE'." >&2
-    echo "[$PROG]   - If you denied the Bluetooth prompt: enable blueutil under" >&2
-    echo "[$PROG]     System Settings > Privacy & Security > Bluetooth, then re-run." >&2
-    echo "[$PROG]   - Otherwise confirm the device is paired (System Settings > Bluetooth)" >&2
-    echo "[$PROG]     and that the name/MAC matches exactly." >&2
-  fi
+  for dev in ${BT_DEVICE_VALUES[@]+"${BT_DEVICE_VALUES[@]}"}; do
+    if blueutil --is-connected "$dev" >/dev/null 2>&1; then
+      log "Bluetooth access OK; blueutil can see '$dev'"
+    else
+      echo "[$PROG] NOTE: blueutil could not query '$dev'." >&2
+      echo "[$PROG]   - If you denied the Bluetooth prompt: enable blueutil under" >&2
+      echo "[$PROG]     System Settings > Privacy & Security > Bluetooth, then re-run." >&2
+      echo "[$PROG]   - Otherwise confirm the device is paired (System Settings > Bluetooth)" >&2
+      echo "[$PROG]     and that the name/MAC matches exactly." >&2
+    fi
+  done
 fi
 
 # alarm.sh runs via '/bin/bash <path>' in the plist, so the execute bit is not

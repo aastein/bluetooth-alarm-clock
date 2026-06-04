@@ -2,12 +2,16 @@
 
 A small, dependency-light macOS tool that wakes you (or anything else) on a daily
 schedule: at a chosen local time it opens a URL in the browser/app you pick,
-optionally connects a Bluetooth audio device and routes system output to it, then
-slowly **ramps the volume up from silence** so you don't get jolted awake.
+optionally connects Bluetooth speaker(s) and routes audio, then slowly **ramps the
+volume up from silence** so you don't get jolted awake.
 
-It's built from two shell scripts and a generated `launchd` LaunchAgent — no
-daemons, no frameworks, no special permissions. The original use case is a 6 AM
-YouTube live stream as a gentle alarm, which is just the default configuration.
+Two modes: a **single-speaker** ramp of the system volume (the default), and a
+**multi-speaker** mode that plays to several speakers at once (via a Multi-Output
+Device) and ramps each one independently.
+
+It's built from shell scripts plus a generated `launchd` LaunchAgent (and, for
+multi-speaker mode, a tiny CoreAudio helper compiled at install). The original use
+case is a 6 AM YouTube live stream as a gentle alarm — just the default config.
 
 ## How it works
 
@@ -23,9 +27,13 @@ YouTube live stream as a gentle alarm, which is just the default configuration.
 - **[Homebrew](https://brew.sh)** — only if you use the optional Bluetooth/audio
   features. `install.sh` will auto-install the specific tools you need:
   - `--bt-device` → [`blueutil`](https://github.com/toy/blueutil)
-  - `--audio-output` → [`switchaudio-osx`](https://github.com/deweller/switchaudio-osx)
-- With just built-in speakers (no `--bt-device`/`--audio-output`), **no Homebrew
-  is required at all.**
+  - `--audio-output` / `--multi-output` → [`switchaudio-osx`](https://github.com/deweller/switchaudio-osx)
+- **Xcode Command Line Tools** (`swiftc`) — only for **multi-speaker mode**, to
+  compile the bundled `device-volume.swift` helper at install. `install.sh` errors
+  with `xcode-select --install` if it's missing. Single-speaker mode needs no build
+  tools.
+- With just built-in speakers (no `--bt-device`/`--audio-output`/`--multi-output`),
+  **no Homebrew or Xcode tools are required at all.**
 
 > **Dependency errors are explicit.** `alarm.sh` never installs anything at run
 > time — if a tool you configured is missing it exits with the exact
@@ -57,12 +65,14 @@ below).
 |---|---|---|
 | `--url <url>` | `https://www.youtube.com/@markets/live` | URL to open. |
 | `--browser <app>` | `Arc` | App name passed to `open -a`. |
-| `--bt-device <id>` | *(none)* | Bluetooth name or MAC to connect. Empty = skip Bluetooth. Requires `blueutil`. |
-| `--audio-output <name>` | *(none)* | Output device to route to. Empty = skip. Requires `SwitchAudioSource`. |
-| `--start-volume <0-100>` | `0` | System volume before the ramp. |
+| `--bt-device <id>` | *(none)* | Bluetooth name or MAC to connect. **Repeatable.** Requires `blueutil`. |
+| `--audio-output <name>` | *(none)* | Single-speaker: output device to route to. Requires `SwitchAudioSource`. |
+| `--multi-output <name>` | *(none)* | Multi-speaker: Multi-Output Device to select. Enables multi mode. Mutually exclusive with `--audio-output`. |
+| `--ramp-speaker <name>` | *(none)* | Multi-speaker: CoreAudio device name to ramp. **Repeatable.** Requires `--multi-output`. |
+| `--start-volume <0-100>` | `0` | Volume before the ramp. |
 | `--target-volume <0-100>` | `60` | Volume the ramp climbs to. |
 | `--ramp-seconds <n>` | `180` | Ramp duration in seconds. |
-| `--connect-timeout <n>` | `20` | Seconds to wait for the Bluetooth connection. |
+| `--connect-timeout <n>` | `20` | Seconds to wait per Bluetooth connection. |
 | `-h`, `--help` | | Show help. |
 
 Bluetooth and audio routing are **best-effort**: if the device can't connect in
@@ -82,17 +92,57 @@ All `alarm.sh` flags above are accepted and forwarded into the LaunchAgent, plus
 | `--uninstall` | | Unload and remove the agent for `--label`, then exit. |
 | `-h`, `--help` | | Show help. |
 
+## Multiple speakers (per-device ramp)
+
+macOS can only play to one Bluetooth speaker at a time *unless* you combine them
+into a **Multi-Output Device**, and a Multi-Output Device has no master volume — so
+the system-volume ramp can't drive it. Multi-speaker mode works around this by
+ramping each member speaker individually through a small CoreAudio helper.
+
+One-time setup, in **Audio MIDI Setup** (Applications → Utilities):
+
+1. Click **+** → **Create Multi-Output Device**.
+2. Tick the speakers you want to play to together.
+3. Leave **drift correction** off for the clock/master device and on for the
+   others.
+4. Give it a name (e.g. `BedroomMulti`).
+
+Then install with `--multi-output` (the Multi-Output Device) and one
+`--ramp-speaker` per speaker you want ramped (using the speakers' **CoreAudio**
+names — see below):
+
+```sh
+bash install.sh --hour 6 --minute 0 \
+  --url "https://www.youtube.com/@markets/live" --browser Arc \
+  --bt-device "Speaker A" --bt-device "Speaker B" \
+  --multi-output "BedroomMulti" \
+  --ramp-speaker "Speaker A" --ramp-speaker "Speaker B" \
+  --target-volume 60 --ramp-seconds 180
+```
+
+This compiles the `device-volume.swift` helper (needs Xcode Command Line Tools),
+connects each `--bt-device`, selects the Multi-Output Device, and ramps each
+`--ramp-speaker` from start to target.
+
+> **Will your speaker actually ramp?** Per-device ramp only works on speakers that
+> honor macOS volume changes (AVRCP). Some Bluetooth speakers ignore them. The tool
+> **probes each `--ramp-speaker` and warns** if it doesn't take. The definitive
+> check: connect the speaker, play audio, press the volume keys — if loudness
+> changes, it'll ramp.
+
 ## Finding device names
 
 ```sh
-blueutil --paired           # Bluetooth device names / MAC addresses
-SwitchAudioSource -a -t output   # exact audio output device names
+blueutil --paired                  # Bluetooth names / MAC addresses (for --bt-device)
+SwitchAudioSource -a -t output     # audio output names (for --audio-output / --multi-output)
+./device-volume list               # output device names (for --ramp-speaker; after building)
 ```
 
-The Bluetooth identifier (`--bt-device`) and the audio output name
-(`--audio-output`) are usually the same string, but not always — `blueutil`
-matches the Bluetooth name/MAC, while `SwitchAudioSource` matches the name shown
-in **System Settings → Sound**.
+The Bluetooth identifier (`--bt-device`) and the audio output / ramp-speaker name
+(`--audio-output`, `--multi-output`, `--ramp-speaker`) are often the same string
+but not always — `blueutil` matches the Bluetooth name/MAC, while
+`SwitchAudioSource`/`device-volume` match the CoreAudio output name shown in
+**System Settings → Sound**.
 
 ## Testing without waiting
 
@@ -133,9 +183,14 @@ bash install.sh --uninstall --label local.media-alarm
   tied to `blueutil`, so it persists for the scheduled run. If it ever
   re-prompts or the connect silently fails, enable `blueutil` manually under
   **System Settings → Privacy & Security → Bluetooth**.
-- **System volume vs. player volume.** The ramp controls macOS *system* output
-  volume. Leave the site's own player at 100% so the ramp is the only thing
-  governing loudness.
+- **System volume vs. player volume.** In single-speaker mode the ramp controls
+  macOS *system* output volume; in multi-speaker mode it sets each speaker's own
+  CoreAudio volume. Either way, leave the site's own player at 100% so the ramp is
+  the only thing governing loudness.
+- **Multi-speaker mode** needs a Multi-Output Device created once in Audio MIDI
+  Setup and the Xcode Command Line Tools (`swiftc`) at install time, and per-speaker
+  ramp depends on each speaker honoring macOS volume changes (see
+  [Multiple speakers](#multiple-speakers-per-device-ramp)).
 
 ## License
 
