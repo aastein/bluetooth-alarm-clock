@@ -23,7 +23,8 @@ set -euo pipefail
 # before the argument parser, so `set -u` never trips on an omitted flag.
 # ----------------------------------------------------------------------------
 URL="https://www.youtube.com/@markets/live"
-BROWSER_APP="Arc"
+BROWSER_APP="Arc"          # browser-backend app for 'open -a'
+PLAYER="browser"           # playback backend: 'browser' (open -a) or 'mpv' (local, live edge)
 BT_DEVICES=()              # repeatable --bt-device; connect each
 AUDIO_OUTPUT_NAME=""       # single-mode output routing
 MULTI_OUTPUT=""            # multi-mode Multi-Output Device (presence enables multi mode)
@@ -53,7 +54,10 @@ mute, then slowly ramp volume from start to target.
 
 Common options:
   --url <url>             URL to open (default: $URL)
-  --browser <app>         App for 'open -a' (default: $BROWSER_APP)
+  --browser <app>         App for 'open -a' (browser backend; default: $BROWSER_APP)
+  --player <browser|mpv>  Playback backend (default: $PLAYER). 'mpv' plays the stream
+                          locally at the live edge (needs mpv + yt-dlp); 'browser'
+                          opens --url in --browser.
   --bt-device <id>        Bluetooth name/MAC to connect; repeatable. Requires blueutil.
   --start-volume <0-100>  Volume before the ramp (default: $START_VOLUME)
   --target-volume <0-100> Volume to ramp up to (default: $TARGET_VOLUME)
@@ -98,6 +102,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --url)             [ $# -ge 2 ] || die "--url requires a value";             URL="$2";               shift 2 ;;
     --browser)         [ $# -ge 2 ] || die "--browser requires a value";         BROWSER_APP="$2";       shift 2 ;;
+    --player)          [ $# -ge 2 ] || die "--player requires a value";          PLAYER="$2";            shift 2 ;;
     --bt-device)       [ $# -ge 2 ] || die "--bt-device requires a value";       BT_DEVICES+=("$2");     shift 2 ;;
     --audio-output)    [ $# -ge 2 ] || die "--audio-output requires a value";    AUDIO_OUTPUT_NAME="$2"; shift 2 ;;
     --multi-output)    [ $# -ge 2 ] || die "--multi-output requires a value";    MULTI_OUTPUT="$2";      shift 2 ;;
@@ -118,6 +123,7 @@ done
 # ----------------------------------------------------------------------------
 [ -n "$URL" ]         || die "--url must not be empty"
 [ -n "$BROWSER_APP" ] || die "--browser must not be empty"
+[ "$PLAYER" = "browser" ] || [ "$PLAYER" = "mpv" ] || die "--player must be 'browser' or 'mpv' (got '$PLAYER')"
 vnum start-volume    "$START_VOLUME"    0 100
 vnum target-volume   "$TARGET_VOLUME"   0 100
 vnum ramp-seconds    "$RAMP_SECONDS"    1
@@ -145,6 +151,10 @@ if [ "${#BT_DEVICES[@]}" -gt 0 ]; then
 fi
 if [ -n "$MULTI_OUTPUT" ] || [ -n "$AUDIO_OUTPUT_NAME" ]; then
   need_cmd SwitchAudioSource "audio routing was requested but 'SwitchAudioSource' is missing. Install it: brew install switchaudio-osx"
+fi
+if [ "$PLAYER" = "mpv" ]; then
+  need_cmd mpv "--player mpv was given but 'mpv' is missing. Install it: brew install mpv"
+  need_cmd yt-dlp "--player mpv needs 'yt-dlp' (mpv resolves the stream with it). Install it: brew install yt-dlp"
 fi
 
 # ----------------------------------------------------------------------------
@@ -248,12 +258,28 @@ osascript -e 'set volume without output muted'
 apply_volume "$START_VOLUME"
 
 # ----------------------------------------------------------------------------
-# 4. Open the URL, then give the page a moment to load and begin playback.
+# 4. Start playback.
+#    mpv     -> plays the live stream locally (via yt-dlp) at the live edge, at
+#               full mpv volume; loudness is governed by the ramp below. Launched
+#               detached so it keeps playing after this script exits (the plist
+#               sets AbandonProcessGroup in mpv mode so launchd doesn't reap it).
+#    browser -> opens the URL and relies on the page autoplaying.
 # ----------------------------------------------------------------------------
-log "opening '$URL' in '$BROWSER_APP'"
-open -a "$BROWSER_APP" "$URL" \
-  || die "could not open '$URL' in '$BROWSER_APP' (is the app installed?)"
-sleep 5
+if [ "$PLAYER" = "mpv" ]; then
+  log "playing '$URL' via mpv (live edge); mpv at 100%, loudness governed by the ramp"
+  nohup mpv --volume=100 "$URL" >/dev/null 2>&1 &
+  mpv_pid=$!
+  disown 2>/dev/null || true
+  sleep 5   # let yt-dlp resolve the stream and mpv start
+  if ! kill -0 "$mpv_pid" 2>/dev/null; then
+    echo "[$PROG] WARNING: mpv exited early (stream resolve failed?); try running: mpv \"$URL\"" >&2
+  fi
+else
+  log "opening '$URL' in '$BROWSER_APP'"
+  open -a "$BROWSER_APP" "$URL" \
+    || die "could not open '$URL' in '$BROWSER_APP' (is the app installed?)"
+  sleep 5
+fi
 
 # ----------------------------------------------------------------------------
 # 5. Ramp. Guard steps == 0 before dividing to avoid a div-by-zero.

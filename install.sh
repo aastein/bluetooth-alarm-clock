@@ -21,6 +21,7 @@ LOG_FILE=""            # derived from LABEL after parsing if left empty
 UNINSTALL=0
 NEED_BLUEUTIL=0
 NEED_SWITCHAUDIO=0
+NEED_MPV=0                   # whether --player mpv was given (installs mpv + yt-dlp)
 MULTI_OUTPUT=""              # --multi-output value (enables multi-speaker mode)
 AUDIO_OUTPUT_PRESENT=0       # whether --audio-output was given (mutual-exclusion check)
 RAMP_SPEAKER_COUNT=0         # number of --ramp-speaker flags supplied
@@ -48,7 +49,9 @@ Schedule / agent options:
 
 Alarm options (forwarded to alarm.sh — see 'alarm.sh --help'):
   --url <url>             URL to open
-  --browser <app>         App for 'open -a'
+  --browser <app>         App for 'open -a' (browser backend)
+  --player <browser|mpv>  Playback backend; 'mpv' plays locally at the live edge
+                          (installs mpv + yt-dlp). Default: browser.
   --bt-device <id>        Bluetooth device to connect; repeatable (installs blueutil)
   --audio-output <name>   Single-speaker: output to route to (installs switchaudio-osx)
   --multi-output <name>   Multi-speaker: Multi-Output Device to select (installs
@@ -109,6 +112,11 @@ while [ $# -gt 0 ]; do
 
     --url|--browser)
       [ $# -ge 2 ] || die "$1 requires a value"
+      FWD_ARGS+=("$1" "$2"); shift 2 ;;
+    --player)
+      [ $# -ge 2 ] || die "--player requires a value"
+      [ "$2" = "browser" ] || [ "$2" = "mpv" ] || die "--player must be 'browser' or 'mpv' (got '$2')"
+      if [ "$2" = "mpv" ]; then NEED_MPV=1; fi
       FWD_ARGS+=("$1" "$2"); shift 2 ;;
     --bt-device)
       [ $# -ge 2 ] || die "--bt-device requires a value"
@@ -205,6 +213,7 @@ ensure_dep() {
 
 if [ "$NEED_BLUEUTIL" = "1" ];    then ensure_dep blueutil blueutil; fi
 if [ "$NEED_SWITCHAUDIO" = "1" ]; then ensure_dep SwitchAudioSource switchaudio-osx; fi
+if [ "$NEED_MPV" = "1" ];         then ensure_dep mpv mpv; ensure_dep yt-dlp yt-dlp; fi
 
 # Multi-speaker mode needs the CoreAudio volume helper compiled from source.
 if [ -n "$MULTI_OUTPUT" ]; then
@@ -265,6 +274,15 @@ mkdir -p "$(dirname "$LOG_FILE")"
 LABEL_XML="$(xml_escape "$LABEL")"
 LOG_XML="$(xml_escape "$LOG_FILE")"
 
+# In mpv mode, keep the detached mpv process alive after alarm.sh exits — launchd
+# otherwise reaps the job's whole process group when the main process finishes.
+ABANDON_PG=""
+if [ "$NEED_MPV" = "1" ]; then
+  ABANDON_PG="    <key>AbandonProcessGroup</key>
+    <true/>
+"
+fi
+
 cat > "$PLIST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -285,7 +303,7 @@ ${PROGRAM_ARGS}
     </dict>
     <key>RunAtLoad</key>
     <false/>
-    <key>StandardOutPath</key>
+${ABANDON_PG}    <key>StandardOutPath</key>
     <string>${LOG_XML}</string>
     <key>StandardErrorPath</key>
     <string>${LOG_XML}</string>

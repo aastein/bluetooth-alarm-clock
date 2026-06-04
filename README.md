@@ -32,6 +32,9 @@ case is a 6 AM YouTube live stream as a gentle alarm — just the default config
   compile the bundled `device-volume.swift` helper at install. `install.sh` errors
   with `xcode-select --install` if it's missing. Single-speaker mode needs no build
   tools.
+- **`mpv` + `yt-dlp`** — only for the **`--player mpv`** backend (plays the stream
+  locally at the live edge). `install.sh` auto-installs both via Homebrew when you
+  pass `--player mpv`. The default browser backend needs neither.
 - With just built-in speakers (no `--bt-device`/`--audio-output`/`--multi-output`),
   **no Homebrew or Xcode tools are required at all.**
 
@@ -64,7 +67,8 @@ below).
 | Flag | Default | Description |
 |---|---|---|
 | `--url <url>` | `https://www.youtube.com/@markets/live` | URL to open. |
-| `--browser <app>` | `Arc` | App name passed to `open -a`. |
+| `--browser <app>` | `Arc` | App name passed to `open -a` (browser backend). |
+| `--player <browser\|mpv>` | `browser` | Playback backend. `mpv` plays the stream locally at the **live edge** (needs `mpv`+`yt-dlp`); `browser` opens `--url` in `--browser`. |
 | `--bt-device <id>` | *(none)* | Bluetooth name or MAC to connect. **Repeatable.** Requires `blueutil`. |
 | `--audio-output <name>` | *(none)* | Single-speaker: output device to route to. Requires `SwitchAudioSource`. |
 | `--multi-output <name>` | *(none)* | Multi-speaker: Multi-Output Device to select. Enables multi mode. Mutually exclusive with `--audio-output`. |
@@ -91,6 +95,30 @@ All `alarm.sh` flags above are accepted and forwarded into the LaunchAgent, plus
 | `--log-file <path>` | `$HOME/Library/Logs/<label>.log` | Where stdout/stderr go. |
 | `--uninstall` | | Unload and remove the agent for `--label`, then exit. |
 | `-h`, `--help` | | Show help. |
+
+## Always-live playback (`--player mpv`)
+
+By default the alarm opens the URL in a browser — but a YouTube **live** stream can
+resume *in the past* there, because YouTube's DVR remembers where you left off. The
+`mpv` backend avoids that entirely:
+
+```sh
+bash install.sh --hour 6 --minute 0 \
+  --url "https://www.youtube.com/@markets/live" \
+  --player mpv \
+  --bt-device a8-e6-e8-8d-19-92 --audio-output "SRS-XB100" \
+  --target-volume 60 --ramp-seconds 180
+```
+
+- `mpv` plays the stream locally via `yt-dlp`, which starts at the **live edge** —
+  no browser, no DVR resume, no extension.
+- It opens an `mpv` **video window** at full mpv volume; the usual volume **ramp
+  still governs loudness** (system volume in single-speaker mode, per-speaker in
+  multi-speaker mode). `--browser` is ignored in this mode.
+- mpv keeps playing after the ramp finishes — the agent's plist sets
+  `AbandonProcessGroup` so launchd doesn't kill it. Stop it with `pkill mpv` or by
+  closing its window.
+- Needs `mpv` + `yt-dlp`, auto-installed by `install.sh` when you pass `--player mpv`.
 
 ## Multiple speakers (per-device ramp)
 
