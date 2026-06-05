@@ -91,10 +91,14 @@ All `alarm.sh` flags above are accepted and forwarded into the LaunchAgent, plus
 |---|---|---|
 | `--hour <0-23>` | `6` | Hour to fire (local time). |
 | `--minute <0-59>` | `0` | Minute to fire. |
+| `--days <spec>` | `daily` | Days to fire: `weekdays`, `weekends`, `daily`, or a comma list of `mon,tue,wed,thu,fri,sat,sun`. |
 | `--label <reverse-dns>` | `local.media-alarm` | LaunchAgent label and plist filename. |
 | `--log-file <path>` | `$HOME/Library/Logs/<label>.log` | Where stdout/stderr go. |
 | `--uninstall` | | Unload and remove the agent for `--label`, then exit. |
 | `-h`, `--help` | | Show help. |
+
+> Weekday scheduling (`--days`) is emitted as a launchd `StartCalendarInterval`
+> array (one entry per weekday) — you never write schedule XML yourself.
 
 ## Always-live playback (`--player mpv`)
 

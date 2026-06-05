@@ -18,6 +18,7 @@ HOUR=6
 MINUTE=0
 LABEL="local.media-alarm"
 LOG_FILE=""            # derived from LABEL after parsing if left empty
+DAYS=""               # --days spec; empty = daily
 UNINSTALL=0
 NEED_BLUEUTIL=0
 NEED_SWITCHAUDIO=0
@@ -44,6 +45,8 @@ Schedule / agent options:
   --minute <0-59>         Minute to fire (default: $MINUTE)
   --label <reverse-dns>   Agent label & plist filename (default: $LABEL)
   --log-file <path>       Log file (default: \$HOME/Library/Logs/<label>.log)
+  --days <spec>           Days to fire: weekdays | weekends | daily | a comma list
+                          of mon,tue,wed,thu,fri,sat,sun (default: daily)
   --uninstall             Unload and remove the agent for --label, then exit
   -h, --help              Show this help and exit
 
@@ -98,6 +101,15 @@ xml_escape() {
   printf '%s' "$s"
 }
 
+# day_to_num NAME -> launchd Weekday number (Sun=0 .. Sat=6); dies on an invalid name.
+day_to_num() {
+  case "$1" in
+    sun) echo 0 ;; mon) echo 1 ;; tue) echo 2 ;; wed) echo 3 ;;
+    thu) echo 4 ;; fri) echo 5 ;; sat) echo 6 ;;
+    *) die "invalid day '$1' in --days (use mon,tue,wed,thu,fri,sat,sun or weekdays/weekends/daily)" ;;
+  esac
+}
+
 # ----------------------------------------------------------------------------
 # Parse arguments. Schedule/agent flags are consumed here; alarm flags are
 # validated where numeric and forwarded verbatim into the plist.
@@ -108,6 +120,7 @@ while [ $# -gt 0 ]; do
     --minute)    [ $# -ge 2 ] || die "--minute requires a value";   MINUTE="$2";   shift 2 ;;
     --label)     [ $# -ge 2 ] || die "--label requires a value";    LABEL="$2";    shift 2 ;;
     --log-file)  [ $# -ge 2 ] || die "--log-file requires a value"; LOG_FILE="$2"; shift 2 ;;
+    --days)      [ $# -ge 2 ] || die "--days requires a value";     DAYS="$2";     shift 2 ;;
     --uninstall) UNINSTALL=1; shift ;;
 
     --url|--browser)
@@ -180,6 +193,27 @@ vnum minute "$MINUTE" 0 59
 # Normalise to base-10 so values like "08" don't get misread as octal later.
 HOUR=$((10#$HOUR))
 MINUTE=$((10#$MINUTE))
+
+# Resolve --days into launchd Weekday numbers (empty WEEKDAYS = daily). The dedupe/
+# sort only runs on a non-empty array — an empty-array expansion would trip set -u.
+WEEKDAYS=()
+if [ -n "$DAYS" ]; then
+  days_norm="$(printf '%s' "$DAYS" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+  case "$days_norm" in
+    daily|all) WEEKDAYS=() ;;
+    weekdays)  WEEKDAYS=(1 2 3 4 5) ;;
+    weekends)  WEEKDAYS=(0 6) ;;
+    *)
+      OLD_IFS="$IFS"; IFS=','
+      for d in $days_norm; do WEEKDAYS+=("$(day_to_num "$d")"); done
+      IFS="$OLD_IFS"
+      ;;
+  esac
+  if [ "${#WEEKDAYS[@]}" -gt 0 ]; then
+    WEEKDAYS=($(printf '%s\n' "${WEEKDAYS[@]}" | sort -un))
+  fi
+fi
+
 [ -n "$LABEL" ] || die "--label must not be empty"
 [ -f "$ALARM" ] || die "alarm.sh not found next to this installer (expected $ALARM)"
 
@@ -274,6 +308,34 @@ mkdir -p "$(dirname "$LOG_FILE")"
 LABEL_XML="$(xml_escape "$LABEL")"
 LOG_XML="$(xml_escape "$LOG_FILE")"
 
+# Build the StartCalendarInterval. Daily (no --days) → a single dict, byte-identical
+# to the original; restricted days → an array of one dict per weekday.
+if [ "${#WEEKDAYS[@]}" -eq 0 ]; then
+  SCHEDULE_XML="    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>${HOUR}</integer>
+        <key>Minute</key>
+        <integer>${MINUTE}</integer>
+    </dict>"
+else
+  SCHEDULE_XML="    <key>StartCalendarInterval</key>
+    <array>"
+  for wd in "${WEEKDAYS[@]}"; do
+    SCHEDULE_XML="$SCHEDULE_XML
+        <dict>
+            <key>Hour</key>
+            <integer>${HOUR}</integer>
+            <key>Minute</key>
+            <integer>${MINUTE}</integer>
+            <key>Weekday</key>
+            <integer>${wd}</integer>
+        </dict>"
+  done
+  SCHEDULE_XML="$SCHEDULE_XML
+    </array>"
+fi
+
 # In mpv mode, keep the detached mpv process alive after alarm.sh exits — launchd
 # otherwise reaps the job's whole process group when the main process finishes.
 ABANDON_PG=""
@@ -294,13 +356,7 @@ cat > "$PLIST" <<EOF
     <array>
 ${PROGRAM_ARGS}
     </array>
-    <key>StartCalendarInterval</key>
-    <dict>
-        <key>Hour</key>
-        <integer>${HOUR}</integer>
-        <key>Minute</key>
-        <integer>${MINUTE}</integer>
-    </dict>
+${SCHEDULE_XML}
     <key>RunAtLoad</key>
     <false/>
 ${ABANDON_PG}    <key>StandardOutPath</key>
@@ -320,7 +376,11 @@ launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
 launchctl bootstrap "gui/$(id -u)" "$PLIST" \
   || die "launchctl bootstrap failed for $PLIST (check the plist and $LOG_FILE)"
 
-log "loaded '$LABEL' — runs daily at $(printf '%02d:%02d' "$HOUR" "$MINUTE") local time"
+if [ "${#WEEKDAYS[@]}" -eq 0 ]; then
+  log "loaded '$LABEL' — runs daily at $(printf '%02d:%02d' "$HOUR" "$MINUTE") local time"
+else
+  log "loaded '$LABEL' — runs at $(printf '%02d:%02d' "$HOUR" "$MINUTE") local time ($DAYS)"
+fi
 log "logs: $LOG_FILE"
 
 # ----------------------------------------------------------------------------
