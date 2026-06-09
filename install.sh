@@ -23,6 +23,7 @@ UNINSTALL=0
 NEED_BLUEUTIL=0
 NEED_SWITCHAUDIO=0
 NEED_MPV=0                   # whether --player mpv was given (installs mpv + yt-dlp)
+AF_PRESENT=0                 # whether --af was given (only valid with --player mpv)
 MULTI_OUTPUT=""              # --multi-output value (enables multi-speaker mode)
 AUDIO_OUTPUT_PRESENT=0       # whether --audio-output was given (mutual-exclusion check)
 RAMP_SPEAKER_COUNT=0         # number of --ramp-speaker flags supplied
@@ -67,6 +68,8 @@ Alarm options (forwarded to alarm.sh — see 'alarm.sh --help'):
   --target-volume <0-100> Volume to ramp up to
   --ramp-seconds <n>      Ramp duration in seconds
   --connect-timeout <n>   Bluetooth connect timeout in seconds
+  --af <filter>           mpv audio filter (mpv backend only); e.g. 'dynaudnorm'
+                          to level loudness so commercials don't spike
 
 Examples:
   # 6 AM YouTube-live wake-up through a paired Bluetooth speaker:
@@ -159,6 +162,10 @@ while [ $# -gt 0 ]; do
       [ $# -ge 2 ] || die "--connect-timeout requires a value"
       vnum connect-timeout "$2" 0
       FWD_ARGS+=("$1" "$2"); shift 2 ;;
+    --af)
+      [ $# -ge 2 ] || die "--af requires a value"
+      AF_PRESENT=1
+      FWD_ARGS+=("$1" "$2"); shift 2 ;;
 
     -h|--help) usage; exit 0 ;;
     -*) die "unknown flag: $1 (see --help)" ;;
@@ -188,6 +195,7 @@ fi
 # Validate install inputs. (Cross-field checks like target >= start live in
 # alarm.sh, which knows the defaults; here we only range-check what we're given.)
 # ----------------------------------------------------------------------------
+[ "$AF_PRESENT" = "0" ] || [ "$NEED_MPV" = "1" ] || die "--af only applies with --player mpv"
 vnum hour   "$HOUR"   0 23
 vnum minute "$MINUTE" 0 59
 # Normalise to base-10 so values like "08" don't get misread as octal later.

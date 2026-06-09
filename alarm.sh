@@ -33,6 +33,7 @@ START_VOLUME=0
 TARGET_VOLUME=60
 RAMP_SECONDS=180
 CONNECT_TIMEOUT=20
+MPV_AF=""                  # mpv --af passthrough (loudness leveling etc.); mpv backend only
 
 # launchd runs jobs with a minimal PATH. Make Homebrew (Apple Silicon + Intel)
 # and the system bins reachable so blueutil / SwitchAudioSource resolve.
@@ -63,6 +64,9 @@ Common options:
   --target-volume <0-100> Volume to ramp up to (default: $TARGET_VOLUME)
   --ramp-seconds <n>      Ramp duration in seconds (default: $RAMP_SECONDS)
   --connect-timeout <n>   Seconds to wait per Bluetooth connect (default: $CONNECT_TIMEOUT)
+  --af <filter>           Audio filter passed to mpv's --af (mpv backend only). Use
+                          for loudness leveling so commercials don't spike, e.g.
+                          'dynaudnorm' or 'dynaudnorm=f=250:g=15'.
   -h, --help              Show this help and exit
 
 Single-speaker mode (default) — ramps the system output volume:
@@ -111,6 +115,7 @@ while [ $# -gt 0 ]; do
     --target-volume)   [ $# -ge 2 ] || die "--target-volume requires a value";   TARGET_VOLUME="$2";     shift 2 ;;
     --ramp-seconds)    [ $# -ge 2 ] || die "--ramp-seconds requires a value";    RAMP_SECONDS="$2";      shift 2 ;;
     --connect-timeout) [ $# -ge 2 ] || die "--connect-timeout requires a value"; CONNECT_TIMEOUT="$2";   shift 2 ;;
+    --af)              [ $# -ge 2 ] || die "--af requires a value";              MPV_AF="$2";            shift 2 ;;
     -h|--help)         usage; exit 0 ;;
     --)                shift; break ;;
     -*)                die "unknown flag: $1 (see --help)" ;;
@@ -124,6 +129,7 @@ done
 [ -n "$URL" ]         || die "--url must not be empty"
 [ -n "$BROWSER_APP" ] || die "--browser must not be empty"
 [ "$PLAYER" = "browser" ] || [ "$PLAYER" = "mpv" ] || die "--player must be 'browser' or 'mpv' (got '$PLAYER')"
+[ -z "$MPV_AF" ] || [ "$PLAYER" = "mpv" ] || die "--af only applies with --player mpv (got --player '$PLAYER')"
 vnum start-volume    "$START_VOLUME"    0 100
 vnum target-volume   "$TARGET_VOLUME"   0 100
 vnum ramp-seconds    "$RAMP_SECONDS"    1
@@ -266,8 +272,14 @@ apply_volume "$START_VOLUME"
 #    browser -> opens the URL and relies on the page autoplaying.
 # ----------------------------------------------------------------------------
 if [ "$PLAYER" = "mpv" ]; then
-  log "playing '$URL' via mpv (live edge); mpv at 100%, loudness governed by the ramp"
-  nohup mpv --volume=100 "$URL" >/dev/null 2>&1 &
+  mpv_opts=(--volume=100)
+  if [ -n "$MPV_AF" ]; then
+    mpv_opts+=(--af="$MPV_AF")
+    log "playing '$URL' via mpv (live edge); mpv at 100%, --af='$MPV_AF', loudness governed by the ramp"
+  else
+    log "playing '$URL' via mpv (live edge); mpv at 100%, loudness governed by the ramp"
+  fi
+  nohup mpv "${mpv_opts[@]}" "$URL" >/dev/null 2>&1 &
   mpv_pid=$!
   disown 2>/dev/null || true
   sleep 5   # let yt-dlp resolve the stream and mpv start

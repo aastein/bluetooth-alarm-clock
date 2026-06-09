@@ -77,6 +77,7 @@ below).
 | `--target-volume <0-100>` | `60` | Volume the ramp climbs to. |
 | `--ramp-seconds <n>` | `180` | Ramp duration in seconds. |
 | `--connect-timeout <n>` | `20` | Seconds to wait per Bluetooth connection. |
+| `--af <filter>` | *(none)* | Audio filter forwarded to mpv's `--af` (**`--player mpv` only**). Use for loudness leveling so commercials don't spike — e.g. `dynaudnorm`. Errors if given without `--player mpv`. |
 | `-h`, `--help` | | Show help. |
 
 Bluetooth and audio routing are **best-effort**: if the device can't connect in
@@ -123,6 +124,21 @@ bash install.sh --hour 6 --minute 0 \
   `AbandonProcessGroup` so launchd doesn't kill it. Stop it with `pkill mpv` or by
   closing its window.
 - Needs `mpv` + `yt-dlp`, auto-installed by `install.sh` when you pass `--player mpv`.
+
+### Stable volume (taming loud commercials)
+
+The ramp sets the *output* level; loud commercials are baked into the *source*
+audio (broadcasters push ads to the ceiling), so they punch through the ramp
+target. Level them with mpv's loudness normalization via `--af`:
+
+```sh
+--af dynaudnorm                       # gentle, smooth (FFmpeg Dynamic Audio Normalizer)
+--af "dynaudnorm=f=250:g=15:m=5"      # faster reaction to spikes, caps boost of quiet parts at 5x
+```
+
+`--af` is a transparent passthrough to mpv, so any FFmpeg audio filter works
+(e.g. `loudnorm=I=-18:TP=-2:LRA=11` for EBU R128 broadcast leveling). It only
+applies to `--player mpv`; passing it with the browser backend is an error.
 
 ## Multiple speakers (per-device ramp)
 
